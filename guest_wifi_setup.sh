@@ -48,9 +48,8 @@ GuestWiFi_SSID=''
 # Note: Setting the below forced flag turns off any prerequisite check - make sure that your setup supports the selected option!
 use_OWE_flag=''
 
-# Set to '1' to enable IPv6 on the guest network, or leave empty/anything else to disable it.
-# When disabled, the guest network will not advertise IPv6, run DHCPv6/RA, or allow IPv6 guest firewall traffic.
-GuestWiFi_IPv6=''
+# Use real shell booleans: true to enable IPv6 on the guest network, false to disable it.
+GuestWiFi_IPv6=false
 
 # By setting the below variables, you can forcibly assign a specific subnet to use for your Guest WiFi.
 # Example:
@@ -67,6 +66,19 @@ GuestWiFi_netmask=''
 
 # === End of user configurable settings ===
 
+# normalize boolean flag to a shell-safe value
+case "$GuestWiFi_IPv6" in
+	true|TRUE|True|1|yes|YES|Yes|on|ON|On)
+		GuestWiFi_IPv6_enabled=true
+		;;
+	false|FALSE|False|0|no|NO|No|off|OFF|Off|"")
+		GuestWiFi_IPv6_enabled=false
+		;;
+	*)
+		echo "GuestWiFi_IPv6 must be true or false" >&2
+		GuestWiFi_IPv6_enabled=false
+		;;
+esac
 
 # in case our location isn't preset, try to geolocate us in order to be able to set the proper country code later
 
@@ -154,7 +166,11 @@ set network.guest.proto='static'
 set network.guest.ipaddr="${GuestWiFi_IP}"
 set network.guest.netmask="${GuestWiFi_netmask}"
 EOI
-[ "$GuestWiFi_IPv6" = '1' ] && uci set network.guest.ip6assign='64' || uci -q delete network.guest.ip6assign
+if $GuestWiFi_IPv6_enabled; then
+	uci set network.guest.ip6assign='64'
+else
+	uci -q delete network.guest.ip6assign
+fi
 
 uci commit network
 
@@ -169,10 +185,12 @@ set dhcp.guest.limit="${DHCPCOUNT}"
 set dhcp.guest.leasetime='12h'
 set dhcp.guest.force='1'
 EOI
-[ "$GuestWiFi_IPv6" = '1' ] && uci batch << EOI
+if $GuestWiFi_IPv6_enabled; then
+	uci batch << EOI
 set dhcp.guest.dhcpv6='server'
 set dhcp.guest.ra='server'
 EOI
+fi
 
 uci commit dhcp
 
@@ -322,7 +340,8 @@ set firewall.guest_dhcp.proto='udp'
 EOI
 
 uci -q delete firewall.guest_dhcpv6
-[ "$GuestWiFi_IPv6" = '1' ] && uci batch << EOI
+if $GuestWiFi_IPv6_enabled; then
+	uci batch << EOI
 set firewall.guest_dhcpv6=rule
 set firewall.guest_dhcpv6.name='Allow-DHCPv6-guest'
 set firewall.guest_dhcpv6.src='guest'
@@ -331,6 +350,7 @@ set firewall.guest_dhcpv6.proto='udp'
 set firewall.guest_dhcpv6.family='ipv6'
 set firewall.guest_dhcpv6.target='ACCEPT'
 EOI
+fi
 
 uci -q delete firewall.guest_dns
 uci batch << EOI
@@ -343,7 +363,8 @@ set firewall.guest_dns.target='ACCEPT'
 EOI
 
 uci -q delete firewall.guest_ndp
-[ "$GuestWiFi_IPv6" = '1' ] && uci batch << EOI
+if $GuestWiFi_IPv6_enabled; then
+	uci batch << EOI
 set firewall.guest_ndp=rule
 set firewall.guest_ndp.name='Allow-NDP-guest'
 set firewall.guest_ndp.src='guest'
@@ -353,6 +374,7 @@ set firewall.guest_ndp.target='ACCEPT'
 add_list firewall.guest_ndp.icmp_type='neighbour-advertisement'
 add_list firewall.guest_ndp.icmp_type='router-advertisement'
 EOI
+fi
 
 uci commit firewall
 
