@@ -48,6 +48,10 @@ GuestWiFi_SSID=''
 # Note: Setting the below forced flag turns off any prerequisite check - make sure that your setup supports the selected option!
 use_OWE_flag=''
 
+# Set to '1' to enable IPv6 on the guest network, or leave empty/anything else to disable it.
+# When disabled, the guest network will not advertise IPv6, run DHCPv6/RA, or allow IPv6 guest firewall traffic.
+GuestWiFi_IPv6=''
+
 # By setting the below variables, you can forcibly assign a specific subnet to use for your Guest WiFi.
 # Example:
 #  GuestWiFi_IP='192.0.2.1'
@@ -90,15 +94,15 @@ unset CC
 		SNAPSHOT) [ -n "$REV" ] && [ "$REV" -lt "19805" ] && use_OWE_flag='1' || use_OWE_flag='2' ;;
 		*) use_OWE_flag='2' ;;
 	esac
-	>/dev/null which apk && PKGLIST="$({ apk -q list --installed wpad*; apk -q list --installed hostapd*; } | grep -E '^hostapd$|^wpad$|ssl$|tls$')" || PKGLIST="$({ opkg list-installed wpad*; opkg list-installed hostapd*; } | cut -f 1 -d ' ' | grep -E '^hostapd$|^wpad$|ssl$|tls$')"
+	>/dev/null which apk && PKGLIST="$({ apk -q list --installed wpad*; apk -q list --installed hostapd*; } | grep -E '^hostapd$|^wpad$|ssl$|tls$')" || PKGLIST="$({ opkg list-installed wpad*; opkg list-installed hostapd*; } | grep -E '^wpad$|^hostapd$|ssl|tls')"
 	[ -z "$PKGLIST" ] && use_OWE_flag='0'
 }
 
 # determine whether to use predefined IP address and subnet (minimum allowed size is /29) or generate random 10.x.x.1/24
 
 RNG='/dev/urandom'
-echo "${GuestWiFi_IP}" | grep -qE '^(([1-9]?[0-9]|1[0-9][0-9]|2([0-4][0-9]|5[0-5]))\.){3}([1-9]?[0-9]|1[0-9][0-9]|2([0-4][0-9]|5[0-5]))(\/[1-9]|\/[1-2][0-9])?$' || GuestWiFi_IP=''
-echo "${GuestWiFi_netmask}" | grep -qE '^(254|252|248|240|224|192|128)\.0\.0\.0$|^255\.(254|252|248|240|224|192|128|0)\.0\.0$|^255\.255\.(254|252|248|240|224|192|128|0)\.0$|^255\.255\.255\.(248|240|224|192|128|0)$|^\/([1-9]|[1-2][0-9])$' || GuestWiFi_netmask=''
+echo "${GuestWiFi_IP}" | grep -qE '^(([1-9]?[0-9]|1[0-9][0-9]|2([0-4][0-9]|5[0-5]))\.){3}([1-9]?[0-9]|1[0-9][0-9]|2([0-4][0-9]|5[0-5]))(\/([1-9]|[1-2][0-9]))?$' || GuestWiFi_IP=''
+echo "${GuestWiFi_netmask}" | grep -qE '^(254|252|248|240|224|192|128)\.0\.0\.0$|^255\.(254|252|248|240|224|192|128|0)\.0\.0$|^255\.255\.(254|252|248|240|224|192|128|0)\.0$|^255\.255\.255\.(248|240|224|192|128|0)$' || [ -z "${GuestWiFi_netmask}" ] || GuestWiFi_netmask=''
 [ -n "${GuestWiFi_netmask}" -a -z "${GuestWiFi_netmask##\/*}" ] && CIDR="${GuestWiFi_netmask##\/}" || CIDR=''
 [ -n "${GuestWiFi_IP}" -a -z "${GuestWiFi_IP##*\/*}" ] && { CIDR="${GuestWiFi_IP##*\/}"; GuestWiFi_IP="${GuestWiFi_IP%%\/*}"; }
 [ -z "${GuestWiFi_netmask}" -a -z "$CIDR" -o -z "${GuestWiFi_IP}" ] && {
@@ -147,10 +151,10 @@ EOI
 
 uci batch << EOI
 set network.guest.proto='static'
-set network.guest.ip6assign='64'
 set network.guest.ipaddr="${GuestWiFi_IP}"
 set network.guest.netmask="${GuestWiFi_netmask}"
 EOI
+[ "$GuestWiFi_IPv6" = '1' ] && uci set network.guest.ip6assign='64' || uci -q delete network.guest.ip6assign
 
 uci commit network
 
@@ -163,9 +167,11 @@ set dhcp.guest.interface='guest'
 set dhcp.guest.start="${DHCPOFFSET}"
 set dhcp.guest.limit="${DHCPCOUNT}"
 set dhcp.guest.leasetime='12h'
+set dhcp.guest.force='1'
+EOI
+[ "$GuestWiFi_IPv6" = '1' ] && uci batch << EOI
 set dhcp.guest.dhcpv6='server'
 set dhcp.guest.ra='server'
-set dhcp.guest.force='1'
 EOI
 
 uci commit dhcp
@@ -316,7 +322,7 @@ set firewall.guest_dhcp.proto='udp'
 EOI
 
 uci -q delete firewall.guest_dhcpv6
-uci batch << EOI
+[ "$GuestWiFi_IPv6" = '1' ] && uci batch << EOI
 set firewall.guest_dhcpv6=rule
 set firewall.guest_dhcpv6.name='Allow-DHCPv6-guest'
 set firewall.guest_dhcpv6.src='guest'
@@ -337,7 +343,7 @@ set firewall.guest_dns.target='ACCEPT'
 EOI
 
 uci -q delete firewall.guest_ndp
-uci batch << EOI
+[ "$GuestWiFi_IPv6" = '1' ] && uci batch << EOI
 set firewall.guest_ndp=rule
 set firewall.guest_ndp.name='Allow-NDP-guest'
 set firewall.guest_ndp.src='guest'
